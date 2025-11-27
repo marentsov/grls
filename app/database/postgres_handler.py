@@ -12,10 +12,9 @@ logger = logging.getLogger(__name__)
 
 class PostgresHandler:
     def __init__(self, database_url: Optional[str] = None):
-        self.database_url = database_url or os.getenv(
-            'DATABASE_URL',
-            'postgresql://postgres:password@localhost:5432/medical_parser'
-        )
+        self.database_url = os.getenv('DATABASE_URL')
+        if not self.database_url:
+            raise ValueError("DATABASE_URL не установлен в .env")
 
     def _get_connection(self):
         """Возвращает соединение с PostgreSQL"""
