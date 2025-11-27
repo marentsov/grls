@@ -130,7 +130,7 @@ def test_postgres():
     handler = PostgresHandler()
 
     if handler.test_connection():
-        print("✅ PostgreSQL connection successful")
+        print("PostgreSQL connection successful")
 
         # Тестовые данные
         test_data = {
@@ -163,7 +163,7 @@ def test_postgres():
         }
 
         session_id = handler.save_analysis_result(test_data)
-        print(f"✅ Test data saved with session: {session_id}")
+        print(f"Test data saved with session: {session_id}")
 
 
 if __name__ == "__main__":
