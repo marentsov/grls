@@ -1,5 +1,5 @@
 import os
-import logging
+from config.logging import get_logger
 from typing import Dict, List, Optional
 from datetime import datetime
 import json
@@ -7,7 +7,7 @@ import json
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class PostgresHandler:
@@ -28,7 +28,7 @@ class PostgresHandler:
             logger.info("Соединение с PostgreSQL установлено")
             return True
         except Exception as e:
-            logger.error(f"Ошибка подключения к PostgreSQL: {e}")
+            logger.error(f"Ошибка подключения к PostgreSQL - {e}")
             return False
 
     def save_analysis_result(self, analysis_result: Dict) -> int:
@@ -88,13 +88,13 @@ class PostgresHandler:
                 ))
 
             conn.commit()
-            logger.info(f"Результаты анализа сохранены в БД (сессия: {session_id})")
+            logger.info(f"Результаты анализа сохранены в БД (сессия - {session_id})")
             return session_id
 
         except Exception as e:
             if conn:
                 conn.rollback()
-            logger.error(f"Ошибка сохранения в БД: {e}")
+            logger.error(f"Ошибка сохранения в БД - {e}")
             raise
         finally:
             if conn:

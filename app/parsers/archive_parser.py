@@ -2,12 +2,12 @@ import os
 import requests
 import zipfile
 from datetime import datetime
-import logging
+from config.logging import get_logger
 from urllib.parse import urljoin
 import re
 import shutil
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ArchiveParser:
@@ -38,7 +38,7 @@ class ArchiveParser:
             excel_files = self._find_excel_files(extracted_files)
             operating_file = self._find_operating_file(excel_files)
 
-            # 🗑️ УДАЛЯЕМ ВСЕ ФАЙЛЫ КРОМЕ "ДЕЙСТВУЮЩИЙ"
+            # удаляем все ненужные файлы
             if operating_file:
                 operating_file = self._cleanup_files(operating_file, extracted_files)
 
@@ -133,8 +133,6 @@ class ArchiveParser:
         """Находит файл с 'Действующий' в названии"""
         operating_patterns = [
             'действующий',
-            'dejstvuyushhij',
-            'deystvuyushchiy',
         ]
 
         for file_path in file_list:
@@ -163,13 +161,13 @@ class ArchiveParser:
 
             logger.info(f"Очищаем файлы, оставляем только: {operating_filename}")
 
-            # Удаляем все файлы кроме operating файла
+            # удаляем все файлы кроме нужного
             for file_path in all_files:
                 if os.path.isfile(file_path) and file_path != operating_file:
                     os.remove(file_path)
                     logger.info(f"Удаляем файл: {os.path.basename(file_path)}")
 
-            # Удаляем пустые поддиректории
+            # удаляем пустые директории
             for root, dirs, files in os.walk(operating_dir, topdown=False):
                 for dir_name in dirs:
                     dir_path = os.path.join(root, dir_name)
@@ -178,20 +176,20 @@ class ArchiveParser:
                             os.rmdir(dir_path)
                             logger.info(f"Удаляем пустую директорию: {dir_path}")
                     except OSError:
-                        pass  # Игнорируем ошибки при удалении непустых директорий
+                        pass
 
-            # Перемещаем operating файл в корень extracted, если он в поддиректории
+            # перемещаем operating файл в корень extracted
             if operating_dir != os.path.join(self.download_dir, "extracted"):
                 new_operating_path = os.path.join(self.download_dir, "extracted", operating_filename)
                 shutil.move(operating_file, new_operating_path)
                 operating_file = new_operating_path
-                logger.info(f"Перемещаем файл в: {new_operating_path}")
+                logger.info(f"Перемещаем файл в {new_operating_path}")
 
             logger.info("Очистка завершена - оставлен только файл 'Действующий'")
             return operating_file
 
         except Exception as e:
-            logger.error(f"Очистка не удалась: {e}")
+            logger.error(f"Очистка не удалась - {e}")
             return operating_file
 
     def get_latest_operating_file(self):
@@ -218,12 +216,12 @@ class ArchiveParser:
     def _is_operating_file(self, file_path):
         """Проверяет, является ли файл operating файлом"""
         filename = os.path.basename(file_path).lower()
-        patterns = ['действующий', 'dejstvuyushhij', 'deystvuyushchiy']
+        patterns = ['действующий']
         return any(pattern in filename for pattern in patterns) or \
             re.search(r'действ', filename, re.IGNORECASE) is not None
 
     def cleanup_old_files(self, keep_last=3):
-        """Очищает старые файлы, оставляя только последние keep_last"""
+        """Очищает старые файлы, оставляя только последние"""
         try:
             zip_files = [f for f in os.listdir(self.download_dir)
                          if f.startswith('grls_archive_') and f.endswith('.zip')]
@@ -240,15 +238,15 @@ class ArchiveParser:
             logger.error(f"Удаление не удалось -  {e}")
 
 
-def test():
-    """Простая функция для тестирования"""
-    print("🚀 Тестируем ArchiveParser...")
-    parser = ArchiveParser()
-    result = parser.download_archive()
-    print(f"Статус: {result['status']}")
-    print(f"Файл 'Действующий': {result['operating_file']}")
-    return result
+# def test():
+#     """Простая функция для тестирования"""
+#     print("Тестируем ArchiveParser")
+#     parser = ArchiveParser()
+#     result = parser.download_archive()
+#     print(f"Статус - {result['status']}")
+#     print(f"Файл 'Действующий' - {result['operating_file']}")
+#     return result
 
 
-if __name__ == "__main__":
-    test()
+# if __name__ == "__main__":
+#     test()

@@ -3,9 +3,9 @@ import json
 import os
 from datetime import datetime
 from collections import Counter
-import logging
+from config.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MedicalParser:
@@ -60,13 +60,13 @@ class MedicalParser:
                         substance_manufacturers[trade_name] = []
                     substance_manufacturers[trade_name].append(manufacturer)
 
-            logger.info(f"Уникальных субстанций для поиска: {len(unique_substances)}")
+            logger.info(f"Уникальных субстанций для поиска - {len(unique_substances)}")
 
             # 3. Ищем препараты, которые используют эти субстанции
             consumers_data = []
 
             for substance in unique_substances:
-                if len(substance) < 3:  # Пропускаем слишком короткие названия
+                if len(substance) < 2:  # Пропускаем слишком короткие названия
                     continue
 
                 substance_lower = substance.lower()
@@ -90,7 +90,7 @@ class MedicalParser:
                         }
                         consumers_data.append(consumer_info)
 
-            logger.info(f"Найдено связей препарат-субстанция: {len(consumers_data)}")
+            logger.info(f"Найдено связей препарат-субстанция - {len(consumers_data)}")
 
             # Статистика
             manufacturer_stats = Counter()
@@ -159,22 +159,22 @@ class MedicalParser:
             raise
 
 
-def test_medical_parser():
-    """Тестовая функция"""
-    parser = MedicalParser()
-
-    # Путь к файлу который скачал archive_parser
-    test_file = "./app/parsers/data/extracted/grls2025-11-21-1-Действующий.xlsx"
-
-    if os.path.exists(test_file):
-        result = parser.analyze_substances_and_consumers(test_file)
-        print("Парсинг завершен")
-        print(f"Статистика: {result['statistics']}")
-        return result
-    else:
-        print("Ошибка не найден файл")
-        return None
-
-
-if __name__ == "__main__":
-    test_medical_parser()
+# def test_medical_parser():
+#     """Тестовая функция"""
+#     parser = MedicalParser()
+#
+#     # Путь к файлу который скачал archive_parser
+#     test_file = "./app/parsers/data/extracted/grls2025-11-21-1-Действующий.xlsx"
+#
+#     if os.path.exists(test_file):
+#         result = parser.analyze_substances_and_consumers(test_file)
+#         print("Парсинг завершен")
+#         print(f"Статистика: {result['statistics']}")
+#         return result
+#     else:
+#         print("Ошибка не найден файл")
+#         return None
+#
+#
+# if __name__ == "__main__":
+#     test_medical_parser()
