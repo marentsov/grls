@@ -30,3 +30,6 @@ logs/*.log
 # Database
 *.db
 *.sqlite3
+
+# файлы для обработки
+app/parsers/data/
