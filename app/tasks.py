@@ -48,3 +48,21 @@ def full_medical_pipeline_task():
 def simple_test_task():
     """Простая задача"""
     return {'status': 'success', 'message': 'Hello from Celery!'}
+
+
+@celery_app.task
+def cleanup_old_files_task():
+    """Очищает старые файлы и записи в БД"""
+    logger.info("Начинаем очистку старых файлов")
+    try:
+        from app.database.postgres_handler import PostgresHandler
+
+        handler = PostgresHandler()
+        handler.cleanup_old_files(days_to_keep=30)
+
+        logger.info("Очистка старых файлов завершена")
+        return {'status': 'success', 'message': 'Old files cleaned up'}
+
+    except Exception as e:
+        logger.error(f"Ошибка при очистке файлов: {e}")
+        return {'status': 'error', 'error': str(e)}

@@ -1,6 +1,6 @@
 import os
 from config.logging import get_logger
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
 import json
 
@@ -32,7 +32,7 @@ class PostgresHandler:
             return False
 
     def save_analysis_result(self, analysis_result: Dict) -> int:
-        """Сохраняет результат анализа в PostgreSQL"""
+        """Сохраняет результат анализа в PostgreSQL с версионированием"""
         conn = None
         try:
             conn = self._get_connection()
@@ -55,40 +55,22 @@ class PostgresHandler:
 
             session_id = cursor.fetchone()[0]
 
-            # Сохраняем производителей субстанций
-            for substance_data in analysis_result['substances_manufacturers']:
-                cursor.execute('''
-                    INSERT INTO substance_manufacturers 
-                    (session_id, substance_name, manufacturers)
-                    VALUES (%s, %s, %s)
-                ''', (
-                    session_id,
-                    substance_data['substance_name'],
-                    json.dumps(substance_data['manufacturers'], ensure_ascii=False)
-                ))
+            # Обрабатываем производителей субстанций с версионированием
+            manufacturer_changes = self._process_substance_manufacturers(
+                cursor, session_id, analysis_result['substances_manufacturers']
+            )
 
-            # Сохраняем связи препарат-субстанция
-            for consumer in analysis_result['substance_consumers']:
-                cursor.execute('''
-                    INSERT INTO substance_consumers 
-                    (session_id, substance_name, preparation_trade_name, preparation_inn_name,
-                     preparation_manufacturer, preparation_country, registration_number,
-                     registration_date, release_forms)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ''', (
-                    session_id,
-                    consumer['substance_name'],
-                    consumer['preparation_trade_name'],
-                    consumer['preparation_inn_name'],
-                    consumer['preparation_manufacturer'],
-                    consumer['preparation_country'],
-                    consumer['registration_number'],
-                    consumer['registration_date'],
-                    consumer['release_forms']
-                ))
+            # Обрабатываем препараты с версионированием
+            consumer_changes = self._process_substance_consumers(
+                cursor, session_id, analysis_result['substance_consumers']
+            )
+
+            # Обновляем статистику изменений
+            total_changes = manufacturer_changes + consumer_changes
+            analysis_result['statistics']['changes_detected'] = total_changes
 
             conn.commit()
-            logger.info(f"Результаты анализа сохранены в БД (сессия - {session_id})")
+            logger.info(f"Результаты анализа сохранены в БД (сессия - {session_id}, изменений - {total_changes})")
             return session_id
 
         except Exception as e:
@@ -100,25 +82,311 @@ class PostgresHandler:
             if conn:
                 conn.close()
 
-    def get_latest_analysis(self) -> Optional[Dict]:
-        """Возвращает последний результат анализа"""
+    def _process_substance_manufacturers(self, cursor, session_id: int, current_manufacturers: List[Dict]) -> int:
+        """Обрабатывает производителей субстанций с версионированием"""
+        changes_count = 0
+        current_timestamp = datetime.now().isoformat()
+
+        for substance_data in current_manufacturers:
+            substance_name = substance_data['substance_name']
+            current_manufacturers_list = substance_data['manufacturers']
+
+            # Ищем существующую запись
+            cursor.execute('''
+                SELECT id, manufacturers, version 
+                FROM substance_manufacturers 
+                WHERE substance_name = %s AND is_current = TRUE
+            ''', (substance_name,))
+
+            existing_record = cursor.fetchone()
+
+            if existing_record:
+                # Сравниваем производителей
+                existing_manufacturers = existing_record[1]
+                if set(existing_manufacturers) != set(current_manufacturers_list):
+                    # Производители изменились - создаем новую версию
+                    changes_count += 1
+
+                    # Помечаем старую версию как неактуальную
+                    cursor.execute('''
+                        UPDATE substance_manufacturers 
+                        SET is_current = FALSE 
+                        WHERE id = %s
+                    ''', (existing_record[0],))
+
+                    # Создаем новую версию
+                    cursor.execute('''
+                        INSERT INTO substance_manufacturers 
+                        (substance_name, manufacturers, first_seen_date, last_seen_date, version)
+                        VALUES (%s, %s, %s, %s, %s)
+                    ''', (
+                        substance_name,
+                        json.dumps(current_manufacturers_list, ensure_ascii=False),
+                        existing_record[3] if len(existing_record) > 3 else current_timestamp,
+                        current_timestamp,
+                        existing_record[2] + 1
+                    ))
+
+                    # Записываем изменение в журнал
+                    cursor.execute('''
+                        INSERT INTO substance_manufacturer_changes 
+                        (substance_name, old_manufacturers, new_manufacturers, change_type, session_id)
+                        VALUES (%s, %s, %s, %s, %s)
+                    ''', (
+                        substance_name,
+                        json.dumps(existing_manufacturers, ensure_ascii=False),
+                        json.dumps(current_manufacturers_list, ensure_ascii=False),
+                        'modified',
+                        session_id
+                    ))
+                else:
+                    # Производители не изменились - обновляем last_seen_date
+                    cursor.execute('''
+                        UPDATE substance_manufacturers 
+                        SET last_seen_date = %s 
+                        WHERE id = %s
+                    ''', (current_timestamp, existing_record[0]))
+            else:
+                # Новая субстанция
+                changes_count += 1
+                cursor.execute('''
+                    INSERT INTO substance_manufacturers 
+                    (substance_name, manufacturers, first_seen_date, last_seen_date)
+                    VALUES (%s, %s, %s, %s)
+                ''', (
+                    substance_name,
+                    json.dumps(current_manufacturers_list, ensure_ascii=False),
+                    current_timestamp,
+                    current_timestamp
+                ))
+
+                # Записываем в журнал
+                cursor.execute('''
+                    INSERT INTO substance_manufacturer_changes 
+                    (substance_name, new_manufacturers, change_type, session_id)
+                    VALUES (%s, %s, %s, %s)
+                ''', (
+                    substance_name,
+                    json.dumps(current_manufacturers_list, ensure_ascii=False),
+                    'added',
+                    session_id
+                ))
+
+        return changes_count
+
+    def _process_substance_consumers(self, cursor, session_id: int, current_consumers: List[Dict]) -> int:
+        """Обрабатывает препараты с версионированием"""
+        changes_count = 0
+        current_timestamp = datetime.now().isoformat()
+
+        for consumer in current_consumers:
+            # Ищем существующую запись
+            cursor.execute('''
+                SELECT id, preparation_trade_name, preparation_inn_name, preparation_manufacturer,
+                       preparation_country, registration_number, registration_date, release_forms, version
+                FROM substance_consumers 
+                WHERE substance_name = %s AND preparation_trade_name = %s 
+                AND preparation_manufacturer = %s AND registration_number = %s
+                AND is_current = TRUE
+            ''', (
+                consumer['substance_name'],
+                consumer['preparation_trade_name'],
+                consumer['preparation_manufacturer'],
+                consumer['registration_number']
+            ))
+
+            existing_record = cursor.fetchone()
+
+            if existing_record:
+                # Проверяем изменения
+                changed_fields = self._get_changed_fields(existing_record, consumer)
+                if changed_fields:
+                    # Есть изменения - создаем новую версию
+                    changes_count += 1
+
+                    # Помечаем старую версию как неактуальную
+                    cursor.execute('''
+                        UPDATE substance_consumers 
+                        SET is_current = FALSE 
+                        WHERE id = %s
+                    ''', (existing_record[0],))
+
+                    # Создаем новую версию
+                    cursor.execute('''
+                        INSERT INTO substance_consumers 
+                        (substance_name, preparation_trade_name, preparation_inn_name,
+                         preparation_manufacturer, preparation_country, registration_number,
+                         registration_date, release_forms, first_seen_date, last_seen_date, version)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ''', (
+                        consumer['substance_name'],
+                        consumer['preparation_trade_name'],
+                        consumer['preparation_inn_name'],
+                        consumer['preparation_manufacturer'],
+                        consumer['preparation_country'],
+                        consumer['registration_number'],
+                        consumer['registration_date'],
+                        consumer['release_forms'],
+                        existing_record[8] if len(existing_record) > 8 else current_timestamp,  # first_seen_date
+                        current_timestamp,
+                        existing_record[8] + 1 if len(existing_record) > 8 else 2  # version
+                    ))
+
+                    # Записываем изменение в журнал
+                    cursor.execute('''
+                        INSERT INTO substance_consumer_changes 
+                        (substance_name, preparation_trade_name, preparation_inn_name,
+                         preparation_manufacturer, preparation_country, registration_number,
+                         change_type, changed_fields, session_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ''', (
+                        consumer['substance_name'],
+                        consumer['preparation_trade_name'],
+                        consumer['preparation_inn_name'],
+                        consumer['preparation_manufacturer'],
+                        consumer['preparation_country'],
+                        consumer['registration_number'],
+                        'modified',
+                        json.dumps(changed_fields, ensure_ascii=False),
+                        session_id
+                    ))
+                else:
+                    # Нет изменений - обновляем last_seen_date
+                    cursor.execute('''
+                        UPDATE substance_consumers 
+                        SET last_seen_date = %s 
+                        WHERE id = %s
+                    ''', (current_timestamp, existing_record[0]))
+            else:
+                # Новый препарат
+                changes_count += 1
+                cursor.execute('''
+                    INSERT INTO substance_consumers 
+                    (substance_name, preparation_trade_name, preparation_inn_name,
+                     preparation_manufacturer, preparation_country, registration_number,
+                     registration_date, release_forms, first_seen_date, last_seen_date)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ''', (
+                    consumer['substance_name'],
+                    consumer['preparation_trade_name'],
+                    consumer['preparation_inn_name'],
+                    consumer['preparation_manufacturer'],
+                    consumer['preparation_country'],
+                    consumer['registration_number'],
+                    consumer['registration_date'],
+                    consumer['release_forms'],
+                    current_timestamp,
+                    current_timestamp
+                ))
+
+                # Записываем в журнал
+                cursor.execute('''
+                    INSERT INTO substance_consumer_changes 
+                    (substance_name, preparation_trade_name, preparation_inn_name,
+                     preparation_manufacturer, preparation_country, registration_number,
+                     change_type, session_id)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ''', (
+                    consumer['substance_name'],
+                    consumer['preparation_trade_name'],
+                    consumer['preparation_inn_name'],
+                    consumer['preparation_manufacturer'],
+                    consumer['preparation_country'],
+                    consumer['registration_number'],
+                    'added',
+                    session_id
+                ))
+
+        return changes_count
+
+    def _get_changed_fields(self, existing_record: Tuple, new_data: Dict) -> List[str]:
+        """Определяет какие поля изменились"""
+        changed_fields = []
+
+        field_mapping = [
+            (1, 'preparation_trade_name'),
+            (2, 'preparation_inn_name'),
+            (3, 'preparation_manufacturer'),
+            (4, 'preparation_country'),
+            (5, 'registration_number'),
+            (6, 'registration_date'),
+            (7, 'release_forms')
+        ]
+
+        for idx, field_name in field_mapping:
+            if idx < len(existing_record) and str(existing_record[idx]) != str(new_data[field_name]):
+                changed_fields.append(field_name)
+
+        return changed_fields
+
+    def cleanup_old_files(self, days_to_keep: int = 30):
+        """Очищает старые файлы и соответствующие записи в БД"""
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # Находим файлы старше days_to_keep дней
+            cutoff_date = datetime.now().replace(
+                day=datetime.now().day - days_to_keep
+            ).isoformat()
+
+            cursor.execute('''
+                SELECT id, source_file FROM analysis_sessions 
+                WHERE timestamp < %s
+            ''', (cutoff_date,))
+
+            old_sessions = cursor.fetchall()
+
+            for session_id, source_file in old_sessions:
+                # Удаляем связанные записи
+                cursor.execute('DELETE FROM substance_manufacturer_changes WHERE session_id = %s', (session_id,))
+                cursor.execute('DELETE FROM substance_consumer_changes WHERE session_id = %s', (session_id,))
+                cursor.execute('DELETE FROM analysis_sessions WHERE id = %s', (session_id,))
+
+                # Удаляем файл если он существует
+                if os.path.exists(source_file):
+                    os.remove(source_file)
+                    logger.info(f"Удален старый файл: {source_file}")
+
+            conn.commit()
+            logger.info(f"Очистка завершена: удалено {len(old_sessions)} старых сессий")
+
+        except Exception as e:
+            if conn:
+                conn.rollback()
+            logger.error(f"Ошибка при очистке старых файлов: {e}")
+        finally:
+            if conn:
+                conn.close()
+
+    def get_change_history(self, substance_name: str = None, limit: int = 50) -> List[Dict]:
+        """Возвращает историю изменений"""
         conn = None
         try:
             conn = self._get_connection()
             cursor = conn.cursor(cursor_factory=RealDictCursor)
 
-            cursor.execute('''
-                SELECT * FROM analysis_sessions 
-                ORDER BY created_at DESC 
-                LIMIT 1
-            ''')
+            query = '''
+                SELECT * FROM substance_manufacturer_changes
+            '''
+            params = []
 
-            latest_session = cursor.fetchone()
-            return dict(latest_session) if latest_session else None
+            if substance_name:
+                query += ' WHERE substance_name = %s'
+                params.append(substance_name)
+
+            query += ' ORDER BY changed_at DESC LIMIT %s'
+            params.append(limit)
+
+            cursor.execute(query, params)
+            changes = cursor.fetchall()
+
+            return [dict(change) for change in changes]
 
         except Exception as e:
-            logger.error(f"Ошибка получения данных - {e}")
-            return None
+            logger.error(f"Ошибка получения истории изменений: {e}")
+            return []
         finally:
             if conn:
                 conn.close()
