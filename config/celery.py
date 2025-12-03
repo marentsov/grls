@@ -9,13 +9,9 @@ celery_app.conf.update(
     imports=['app.tasks'],
     timezone='Europe/Moscow',
     beat_schedule={
-        'daily-medical-pipeline-9am': {
+        'test-medical-pipeline-1555': {
             'task': 'app.tasks.full_medical_pipeline_task',
-            'schedule': crontab(hour=9, minute=0),  # Каждый день в 9:00
-        },
-        'daily-medical-pipeline-6pm': {
-            'task': 'app.tasks.full_medical_pipeline_task',
-            'schedule': crontab(hour=18, minute=0),  # Каждый день в 18:00
+            'schedule': crontab(hour=9, minute=0),  # каждый день в 9:00
         },
     },
 )

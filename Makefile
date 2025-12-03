@@ -31,25 +31,3 @@ flower:
 
 test:
 	celery -A config.celery call app.tasks.health_check_task
-
-clean:
-	docker-compose down -v
-	rm -rf logs/*.log
-	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete
-
-status:
-	@echo "=== Service Status ==="
-	@docker-compose ps
-	@echo "\n=== Redis Keys ==="
-	@redis-cli -h localhost KEYS "*" | head -10
-
-# Запуск конкретной задачи вручную
-run-health:
-	celery -A config.celery call app.tasks.health_check_task
-
-run-daily:
-	celery -A config.celery call app.tasks.sample_daily_task --args='["Manual daily task"]'
-
-run-long:
-	celery -A config.celery call app.tasks.long_running_task --args='[5]'

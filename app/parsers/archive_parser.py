@@ -6,6 +6,7 @@ from config.logging import get_logger
 from urllib.parse import urljoin
 import re
 import shutil
+from bs4 import BeautifulSoup
 
 logger = get_logger(__name__)
 
@@ -18,21 +19,31 @@ class ArchiveParser:
 
         # настройка сессии
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
         })
 
         # создаем директорию для загрузок если ее нет
         os.makedirs(download_dir, exist_ok=True)
 
     def download_archive(self):
-        """Скачивает архив с сайта ГРЛС и находит файл с 'Действующий' в названии"""
+        """Скачивает архив с сайта ГРЛС, парся главную страницу для получения свежей ссылки"""
         try:
-            logger.info("Начинаем парсинг архива")
+            logger.info("Начинаем парсинг главной страницы ГРЛС")
 
-            archive_url = self._construct_download_url()
-            logger.info(f"URL: {archive_url}")
+            # 1. Парсим главную страницу чтобы найти свежую ссылку на архив
+            archive_url = self._get_latest_archive_url()
+            if not archive_url:
+                return {
+                    'status': 'error',
+                    'error': 'Не удалось найти ссылку на архив',
+                    'timestamp': datetime.now().isoformat()
+                }
 
+            logger.info(f"Найдена ссылка на архив: {archive_url}")
+
+            # 2. Скачиваем архив
             zip_path = self._download_file(archive_url)
             extracted_files = self._extract_archive(zip_path)
             excel_files = self._find_excel_files(extracted_files)
@@ -48,7 +59,7 @@ class ArchiveParser:
                 'archive_url': archive_url,
                 'zip_path': zip_path,
                 'operating_file': operating_file,
-                'message': 'Арихив скачан и очищен'
+                'message': 'Архив скачан и очищен'
             }
 
             if operating_file:
@@ -59,24 +70,75 @@ class ArchiveParser:
             return result
 
         except Exception as e:
-            logger.error(f"Не удалось скачать архив {e}")
+            logger.error(f"Не удалось скачать архив: {e}")
             return {
                 'status': 'error',
                 'error': str(e),
                 'timestamp': datetime.now().isoformat()
             }
 
-    def _construct_download_url(self):
-        """Создает URL для скачивания архива"""
-        file_guid = "0fa74bc9-c435-4405-9146-eebd3b0b300c"
-        user_req = "8590283"
-        download_path = f"GetGRLS.ashx?FileGUID={file_guid}&UserReq={user_req}"
-        return urljoin(self.base_url, download_path)
+    def _get_latest_archive_url(self):
+        """Парсит главную страницу ГРЛС и находит ссылку на последний архив"""
+        try:
+            # Загружаем главную страницу
+            main_url = f"{self.base_url}/GRLS.aspx"
+            response = self.session.get(main_url, timeout=30)
+            response.raise_for_status()
+
+            # Парсим HTML
+            soup = BeautifulSoup(response.content, 'html.parser')
+
+            # Ищем элемент с архивом по классу или ID
+            archive_element = soup.find('div', id='ctl00_plate_tdzip')
+            if not archive_element:
+                # Пробуем найти по другим атрибутам
+                archive_element = soup.find('button', class_='btn_flat')
+                if not archive_element:
+                    logger.error("Не найден элемент с архивом на странице")
+                    return None
+
+            # Ищем onclick атрибут с ссылкой
+            onclick_attr = archive_element.get('onclick')
+            if onclick_attr:
+                # Извлекаем URL из onclick
+                match = re.search(r"go\('([^']+)'\)", onclick_attr)
+                if match:
+                    download_path = match.group(1)
+                    full_url = urljoin(self.base_url, download_path)
+                    logger.info(f"Найдена ссылка из onclick: {full_url}")
+                    return full_url
+
+            # Если не нашли в onclick, ищем ссылку в дочерних элементах
+            link_element = archive_element.find('a')
+            if link_element and link_element.get('href'):
+                download_path = link_element.get('href')
+                full_url = urljoin(self.base_url, download_path)
+                logger.info(f"Найдена ссылка из href: {full_url}")
+                return full_url
+
+            # Пробуем найти по тексту или другим атрибутам
+            buttons = soup.find_all('button', class_=re.compile(r'btn'))
+            for button in buttons:
+                onclick = button.get('onclick', '')
+                if 'GetGRLS.ashx' in onclick:
+                    match = re.search(r"go\('([^']+)'\)", onclick)
+                    if match:
+                        download_path = match.group(1)
+                        full_url = urljoin(self.base_url, download_path)
+                        logger.info(f"Найдена ссылка из кнопки: {full_url}")
+                        return full_url
+
+            logger.error("Не удалось извлечь ссылку на архив")
+            return None
+
+        except Exception as e:
+            logger.error(f"Ошибка при парсинге главной страницы: {e}")
+            return None
 
     def _download_file(self, url, chunk_size=8192):
         """Скачивает файл по URL"""
         try:
-            response = self.session.get(url, stream=True, timeout=30)
+            response = self.session.get(url, stream=True, timeout=60)
             response.raise_for_status()
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -125,7 +187,7 @@ class ArchiveParser:
         for file_path in file_list:
             if os.path.isfile(file_path) and file_path.lower().endswith(excel_extensions):
                 excel_files.append(file_path)
-                logger.info(f"Ищем ексель файлы {os.path.basename(file_path)}")
+                logger.info(f"Найден Excel файл: {os.path.basename(file_path)}")
 
         return excel_files
 
@@ -148,13 +210,13 @@ class ArchiveParser:
                 return file_path
 
         if file_list:
-            logger.warning(f"Не удалось найти нужный файл -  {os.path.basename(file_list[0])}")
+            logger.warning(f"Не удалось найти нужный файл - берем первый: {os.path.basename(file_list[0])}")
             return file_list[0]
 
         return None
 
     def _cleanup_files(self, operating_file, all_files):
-        """Удаляет все файлы кроме operating файла"""
+        """Удаляет все файлы кроме действующего файла"""
         try:
             operating_filename = os.path.basename(operating_file)
             operating_dir = os.path.dirname(operating_file)
@@ -172,13 +234,13 @@ class ArchiveParser:
                 for dir_name in dirs:
                     dir_path = os.path.join(root, dir_name)
                     try:
-                        if not os.listdir(dir_path):  # Если директория пустая
+                        if not os.listdir(dir_path):
                             os.rmdir(dir_path)
                             logger.info(f"Удаляем пустую директорию: {dir_path}")
                     except OSError:
                         pass
 
-            # перемещаем operating файл в корень extracted
+            # перемещаем действующий файл в корень extracted
             if operating_dir != os.path.join(self.download_dir, "extracted"):
                 new_operating_path = os.path.join(self.download_dir, "extracted", operating_filename)
                 shutil.move(operating_file, new_operating_path)
@@ -193,7 +255,7 @@ class ArchiveParser:
             return operating_file
 
     def get_latest_operating_file(self):
-        """Возвращает путь к последнему operating файлу"""
+        """Возвращает путь к последнему действующему файлу"""
         extracted_dir = os.path.join(self.download_dir, "extracted")
 
         if not os.path.exists(extracted_dir):
@@ -214,7 +276,7 @@ class ArchiveParser:
         return excel_files[0] if excel_files else None
 
     def _is_operating_file(self, file_path):
-        """Проверяет, является ли файл operating файлом"""
+        """Проверяет, является ли файл действующим файлом"""
         filename = os.path.basename(file_path).lower()
         patterns = ['действующий']
         return any(pattern in filename for pattern in patterns) or \
@@ -236,6 +298,24 @@ class ArchiveParser:
 
         except Exception as e:
             logger.error(f"Удаление не удалось -  {e}")
+
+
+def test():
+    """Простая функция для тестирования"""
+    print("Тестируем ArchiveParser с парсингом главной страницы")
+    parser = ArchiveParser()
+    result = parser.download_archive()
+    print(f"Статус - {result['status']}")
+    if result['status'] == 'success':
+        print(f"Файл 'Действующий' - {result['operating_file']}")
+        print(f"URL архива - {result['archive_url']}")
+    else:
+        print(f"Ошибка - {result.get('error', 'Unknown error')}")
+    return result
+
+
+if __name__ == "__main__":
+    test()
 
 
 # def test():
