@@ -11,7 +11,7 @@ celery_app.conf.update(
     beat_schedule={
         'test-medical-pipeline-1555': {
             'task': 'app.tasks.full_medical_pipeline_task',
-            'schedule': crontab(hour=9, minute=0),  # каждый день в 9:00
+            'schedule': crontab(hour=9, minute=40),  # каждый день в 9:00
         },
     },
 )

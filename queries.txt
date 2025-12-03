@@ -1,0 +1,80 @@
+-- Посмотреть последние 5 сессий анализа
+SELECT id, timestamp, source_file, substances_found, preparations_found
+FROM analysis_sessions
+ORDER BY created_at DESC
+LIMIT 5;
+
+-- Найти все версии производителей для вещества "Парацетамол"
+SELECT version, manufacturers, first_seen_date, last_seen_date
+FROM substance_manufacturers
+WHERE substance_name = 'Парацетамол'
+ORDER BY version DESC;
+
+-- Найти актуальных производителей субстанций
+SELECT substance_name, manufacturers
+FROM substance_manufacturers
+WHERE is_current = TRUE
+LIMIT 10;
+
+-- Найти все препараты, содержащие "Парацетамол"
+SELECT preparation_trade_name, preparation_manufacturer, version, is_current
+FROM substance_consumers
+WHERE substance_name = 'Парацетамол'
+AND is_current = TRUE;
+
+-- Найти все версии конкретного препарата
+SELECT version, preparation_inn_name, preparation_country, registration_date, release_forms
+FROM substance_consumers
+WHERE substance_name = 'Парацетамол'
+AND preparation_trade_name = 'Панадол'
+ORDER BY version DESC;
+
+-- Найти препараты в которых есть "Ибупрофен" и их производителей
+SELECT
+    preparation_trade_name,
+    preparation_manufacturer,
+    preparation_country,
+    registration_number,
+    release_forms,
+    first_seen_date
+FROM substance_consumers
+WHERE substance_name = 'Ибупрофен'
+AND is_current = TRUE
+ORDER BY preparation_trade_name;
+
+-- ТОП 10 производителей активных веществ
+SELECT
+    jsonb_array_elements_text(manufacturers) as manufacturer,
+    COUNT(*) as substance_count
+FROM substance_manufacturers
+WHERE is_current = TRUE
+GROUP BY manufacturer
+ORDER BY substance_count DESC
+LIMIT 10;
+
+-- Распределение препаратов по странам-производителям
+SELECT
+    preparation_country,
+    COUNT(*) as drug_count
+FROM substance_consumers
+WHERE is_current = TRUE
+GROUP BY preparation_country
+ORDER BY drug_count DESC;
+
+-- Общая статистика системы
+SELECT
+    COUNT(DISTINCT substance_name) as unique_substances,
+    COUNT(DISTINCT preparation_trade_name) as unique_drugs,
+    COUNT(*) as total_relationships,
+    MAX(last_seen_date) as last_update
+FROM substance_consumers
+WHERE is_current = TRUE;
+
+-- Количество изменений за последнюю неделю
+SELECT
+    change_type,
+    COUNT(*) as count
+FROM substance_consumer_changes
+WHERE changed_at >= NOW() - INTERVAL '7 days'
+GROUP BY change_type;
+

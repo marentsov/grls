@@ -4,16 +4,35 @@ import os
 from datetime import datetime
 from collections import Counter
 from config.logging import get_logger
+from typing import Dict, List, Any, Set
 
 logger = get_logger(__name__)
 
 
 class MedicalParser:
-    def __init__(self):
-        self.processed_files = []
+    """Анализатор Excel файлов ГРЛС для поиска связей между веществами и препаратами."""
 
-    def analyze_substances_and_consumers(self, input_file_path):
-        """Анализирует Excel файл и возвращает структурированные данные"""
+    def __init__(self) -> None:
+        self.processed_files: List[str] = []
+
+    def analyze_substances_and_consumers(self, input_file_path: str) -> Dict[str, Any]:
+        """
+        Анализирует Excel файл ГРЛС и возвращает структурированные данные.
+
+        Args:
+            input_file_path: Путь к Excel файлу 'Действующий'
+
+        Returns:
+            Dict с результатами анализа:
+            - timestamp: Время анализа
+            - source_file: Путь к исходному файлу
+            - statistics: Статистика по данным
+            - substances_manufacturers: Список производителей субстанций
+            - substance_consumers: Список связей препарат-субстанция
+
+        Raises:
+            Exception: Ошибка при анализе файла
+        """
         try:
             logger.info(f"Начинаем анализ файла: {input_file_path}")
 
@@ -40,8 +59,8 @@ class MedicalParser:
             logger.info(f"Найдено препаратов: {len(preparations_df)}")
 
             # 2. Создаем список уникальных МНН субстанций
-            unique_substances = set()
-            substance_manufacturers = {}
+            unique_substances: Set[str] = set()
+            substance_manufacturers: Dict[str, List[str]] = {}
 
             for idx, row in substances_df.iterrows():
                 inn_name = str(row[INN_NAME_COL]).strip()
@@ -60,10 +79,10 @@ class MedicalParser:
                         substance_manufacturers[trade_name] = []
                     substance_manufacturers[trade_name].append(manufacturer)
 
-            logger.info(f"Уникальных субстанций для поиска - {len(unique_substances)}")
+            logger.info(f"Уникальных субстанций для поиска: {len(unique_substances)}")
 
             # 3. Ищем препараты, которые используют эти субстанции
-            consumers_data = []
+            consumers_data: List[Dict[str, str]] = []
 
             for substance in unique_substances:
                 if len(substance) < 2:  # Пропускаем слишком короткие названия
@@ -76,8 +95,7 @@ class MedicalParser:
                     trade_name = str(row[TRADE_NAME_COL]).lower()
 
                     # Ищем субстанцию в МНН или торговом названии препарата
-                    if (substance_lower in inn_name or
-                            substance_lower in trade_name):
+                    if (substance_lower in inn_name or substance_lower in trade_name):
                         consumer_info = {
                             'substance_name': substance,
                             'preparation_trade_name': str(row[TRADE_NAME_COL]),
@@ -90,9 +108,9 @@ class MedicalParser:
                         }
                         consumers_data.append(consumer_info)
 
-            logger.info(f"Найдено связей препарат-субстанция - {len(consumers_data)}")
+            logger.info(f"Найдено связей препарат-субстанция: {len(consumers_data)}")
 
-            # Статистика
+            # 4. Собираем статистику
             manufacturer_stats = Counter()
             for manufacturers in substance_manufacturers.values():
                 for manufacturer in manufacturers:
@@ -109,7 +127,7 @@ class MedicalParser:
                 if country and country not in ['', 'nan', '~']:
                     country_stats[country] += 1
 
-            # Формируем итоговый результат
+            # 5. Формируем итоговый результат
             result = {
                 'timestamp': datetime.now().isoformat(),
                 'source_file': input_file_path,
@@ -137,11 +155,24 @@ class MedicalParser:
             return result
 
         except Exception as e:
-            logger.error(f"Ошибка при анализе файла - {e}")
+            logger.error(f"Ошибка при анализе файла: {e}")
             raise
 
-    def save_analysis_results(self, analysis_result, output_dir="./app/parsers/data/results"):
-        """Сохраняет результаты анализа в файлы"""
+    def save_analysis_results(self, analysis_result: Dict[str, Any],
+                              output_dir: str = "./app/parsers/data/results") -> str:
+        """
+        Сохраняет результаты анализа в JSON файл.
+
+        Args:
+            analysis_result: Результаты анализа
+            output_dir: Директория для сохранения
+
+        Returns:
+            Путь к сохраненному JSON файлу
+
+        Raises:
+            Exception: Ошибка при сохранении
+        """
         try:
             os.makedirs(output_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
@@ -151,30 +182,11 @@ class MedicalParser:
             with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(analysis_result, f, ensure_ascii=False, indent=2, default=str)
 
-            logger.info(f"Результаты сохранены в - {json_file}")
+            logger.info(f"Результаты сохранены в: {json_file}")
             return json_file
 
         except Exception as e:
-            logger.error(f"Ошибка при сохранении результатов - {e}")
+            logger.error(f"Ошибка при сохранении результатов: {e}")
             raise
 
-
-# def test_medical_parser():
-#     """Тестовая функция"""
-#     parser = MedicalParser()
-#
-#     # Путь к файлу который скачал archive_parser
-#     test_file = "./app/parsers/data/extracted/grls2025-11-21-1-Действующий.xlsx"
-#
-#     if os.path.exists(test_file):
-#         result = parser.analyze_substances_and_consumers(test_file)
-#         print("Парсинг завершен")
-#         print(f"Статистика: {result['statistics']}")
-#         return result
-#     else:
-#         print("Ошибка не найден файл")
-#         return None
-#
-#
-# if __name__ == "__main__":
-#     test_medical_parser()
+# Удаляем закомментированный код в конце файла

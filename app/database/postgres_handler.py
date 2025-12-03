@@ -1,12 +1,11 @@
 import os
 from config.logging import get_logger
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import json
 
 import psycopg2
 from psycopg2 import IntegrityError
-from psycopg2.extras import RealDictCursor
 
 logger = get_logger(__name__)
 
